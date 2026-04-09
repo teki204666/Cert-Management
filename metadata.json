@@ -1,5 +1,5 @@
 {
-  "name": "Remix: 證書管理系統",
+  "name": "證書管理系統",
   "description": "專業的工程人員證照管理平台，具備到期自動通知、QR Code 現場查驗及角色權限控管功能。",
   "requestFramePermissions": [
     "camera"
