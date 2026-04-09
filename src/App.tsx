@@ -28,7 +28,9 @@ import {
   Building2,
   Settings,
   Tags,
-  UserCircle
+  UserCircle,
+  RefreshCw,
+  Upload
 } from 'lucide-react';
 import { format, addDays, isBefore, parseISO, differenceInDays, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay } from 'date-fns';
 import { QRCodeSVG } from 'qrcode.react';
@@ -85,10 +87,22 @@ export default function App() {
     const saved = localStorage.getItem('app_current_profile');
     return saved ? JSON.parse(saved) : null;
   });
-  const [staff, setStaff] = useState<Staff[]>([]);
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [certs, setCerts] = useState<Certificate[]>([]);
-  const [certTypes, setCertTypes] = useState<CertType[]>([]);
+  const [staff, setStaff] = useState<Staff[]>(() => {
+    const saved = localStorage.getItem('app_staff');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [machines, setMachines] = useState<Machine[]>(() => {
+    const saved = localStorage.getItem('app_machines');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [certs, setCerts] = useState<Certificate[]>(() => {
+    const saved = localStorage.getItem('app_certs');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [certTypes, setCertTypes] = useState<CertType[]>(() => {
+    const saved = localStorage.getItem('app_certTypes');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [allUsers, setAllUsers] = useState<UserProfile[]>(() => {
     const saved = localStorage.getItem('app_all_users');
     if (saved) return JSON.parse(saved);
@@ -121,6 +135,7 @@ export default function App() {
   const [newUserRole, setNewUserRole] = useState('staff');
   const [newUserPassword, setNewUserPassword] = useState('');
   const [detailCert, setDetailCert] = useState<Certificate | null>(null);
+  const [renewCert, setRenewCert] = useState<Certificate | null>(null);
 
   const [notificationDays, setNotificationDays] = useState(30);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -138,6 +153,22 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('app_all_users', JSON.stringify(allUsers));
   }, [allUsers]);
+
+  useEffect(() => {
+    localStorage.setItem('app_staff', JSON.stringify(staff));
+  }, [staff]);
+
+  useEffect(() => {
+    localStorage.setItem('app_machines', JSON.stringify(machines));
+  }, [machines]);
+
+  useEffect(() => {
+    localStorage.setItem('app_certs', JSON.stringify(certs));
+  }, [certs]);
+
+  useEffect(() => {
+    localStorage.setItem('app_certTypes', JSON.stringify(certTypes));
+  }, [certTypes]);
 
   useEffect(() => {
     if (user) localStorage.setItem('app_current_user', JSON.stringify(user));
@@ -166,19 +197,27 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    setStaff([
-      { id: '1', name: '王大明', staffNumber: 'EMP001', department: '工程部', contractNumber: 'TC-2026-001', createdAt: new Date().toISOString() }
-    ]);
-    setMachines([
-      { id: '1', name: '挖土機', machineNumber: 'EXC-001', department: '工程部', contractNumber: 'TC-2026-001', createdAt: new Date().toISOString() }
-    ]);
-    setCerts([
-      { id: '1', ownerType: 'staff', ownerId: '1', type: '勞工安全衛生管理員', certNumber: 'A001', expiryDate: format(addDays(new Date(), 15), 'yyyy-MM-dd'), documentUrl: '', ownerName: '王大明', contractNumber: 'TC-2026-001', status: 'valid', createdAt: new Date().toISOString() }
-    ]);
-    setCertTypes([
-      { id: '1', name: '勞工安全衛生管理員', category: 'staff', createdAt: new Date().toISOString() },
-      { id: '2', name: '起重機操作證', category: 'machine', createdAt: new Date().toISOString() }
-    ]);
+    if (staff.length === 0) {
+      setStaff([
+        { id: '1', name: '王大明', staffNumber: 'EMP001', department: '工程部', contractNumber: 'TC-2026-001', createdAt: new Date().toISOString() }
+      ]);
+    }
+    if (machines.length === 0) {
+      setMachines([
+        { id: '1', name: '挖土機', machineNumber: 'EXC-001', department: '工程部', contractNumber: 'TC-2026-001', createdAt: new Date().toISOString() }
+      ]);
+    }
+    if (certs.length === 0) {
+      setCerts([
+        { id: '1', ownerType: 'staff', ownerId: '1', type: '勞工安全衛生管理員', certNumber: 'A001', expiryDate: format(addDays(new Date(), 15), 'yyyy-MM-dd'), documentUrl: '', ownerName: '王大明', contractNumber: 'TC-2026-001', status: 'valid', createdAt: new Date().toISOString() }
+      ]);
+    }
+    if (certTypes.length === 0) {
+      setCertTypes([
+        { id: '1', name: '勞工安全衛生管理員', category: 'staff', createdAt: new Date().toISOString() },
+        { id: '2', name: '起重機操作證', category: 'machine', createdAt: new Date().toISOString() }
+      ]);
+    }
     setNotificationDays(30);
   }, [user]);
 
@@ -481,22 +520,20 @@ export default function App() {
               active={activeTab === 'contracts' && !activeContract} 
               onClick={() => { setActiveTab('contracts'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
             />
-            {(activeTab === 'contracts' || activeContract) && (
-              <div className="mt-1 space-y-1 pl-4 border-l border-slate-800 ml-5">
-                {uniqueContracts.map(contract => (
-                  <button
-                    key={contract}
-                    onClick={() => { setActiveContract(contract); setActiveTab('contracts'); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
-                    className={cn(
-                      "w-full text-left px-3 py-2 rounded-lg text-sm transition-all truncate",
-                      activeContract === contract ? "bg-blue-600/20 text-blue-400 font-medium" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-                    )}
-                  >
-                    {contract}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="mt-1 space-y-1 pl-4 border-l border-slate-800 ml-5">
+              {uniqueContracts.map(contract => (
+                <button
+                  key={contract}
+                  onClick={() => { setActiveContract(contract); setActiveTab('contracts'); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+                  className={cn(
+                    "w-full text-left px-3 py-2 rounded-lg text-sm transition-all truncate",
+                    activeContract === contract ? "bg-blue-600/20 text-blue-400 font-medium" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                  )}
+                >
+                  {contract}
+                </button>
+              ))}
+            </div>
           </div>
         </nav>
 
@@ -689,6 +726,18 @@ export default function App() {
                   />
                 </div>
                 <div className="flex gap-2">
+                  <ImportButton 
+                    onImport={(data) => setStaff(prev => [...prev, ...data])} 
+                    expectedHeaders={['姓名', '工號', '部門', '合約編號']}
+                    rowMapper={(row) => ({
+                      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                      name: row[0],
+                      staffNumber: row[1],
+                      department: row[2],
+                      contractNumber: row[3],
+                      createdAt: new Date().toISOString()
+                    })}
+                  />
                   <Button onClick={exportStaff} variant="outline" className="flex items-center gap-2">
                     <Download size={18} /> 匯出
                   </Button>
@@ -746,6 +795,18 @@ export default function App() {
                   />
                 </div>
                 <div className="flex gap-2">
+                  <ImportButton 
+                    onImport={(data) => setMachines(prev => [...prev, ...data])} 
+                    expectedHeaders={['機械名稱', '機械編號', '部門', '合約編號']}
+                    rowMapper={(row) => ({
+                      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                      name: row[0],
+                      machineNumber: row[1],
+                      department: row[2],
+                      contractNumber: row[3],
+                      createdAt: new Date().toISOString()
+                    })}
+                  />
                   <Button onClick={exportMachines} variant="outline" className="flex items-center gap-2">
                     <Download size={18} /> 匯出
                   </Button>
@@ -930,6 +991,23 @@ export default function App() {
                   </select>
                 </div>
                 <div className="flex gap-2">
+                  <ImportButton 
+                    onImport={(data) => setCerts(prev => [...prev, ...data])} 
+                    expectedHeaders={['持有人/機械', '類型', '證書類型', '證書編號', '到期日', '狀態']}
+                    rowMapper={(row) => ({
+                      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                      ownerName: row[0],
+                      ownerType: row[1] === '人員' ? 'staff' : 'machine',
+                      type: row[2],
+                      certNumber: row[3],
+                      expiryDate: row[4],
+                      status: row[5] === '已過期' ? 'expired' : 'valid',
+                      ownerId: 'imported',
+                      documentUrl: '',
+                      contractNumber: '',
+                      createdAt: new Date().toISOString()
+                    })}
+                  />
                   <Button onClick={exportCerts} variant="outline" className="flex items-center gap-2">
                     <Download size={18} /> 匯出
                   </Button>
@@ -987,9 +1065,14 @@ export default function App() {
                             </a>
                           )}
                           {profile?.role === 'admin' && (
-                            <button onClick={() => setConfirmDelete({type: 'cert', id: c.id})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
-                              <Trash2 size={16} />
-                            </button>
+                            <>
+                              <button onClick={() => setRenewCert(c)} className="p-2 hover:bg-emerald-100 hover:text-emerald-600 rounded-md transition-colors text-slate-500" title="展延證書">
+                                <RefreshCw size={16} />
+                              </button>
+                              <button onClick={() => setConfirmDelete({type: 'cert', id: c.id})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
+                                <Trash2 size={16} />
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -1004,6 +1087,16 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <p className="text-slate-500 text-sm">檢視系統中可用的證書類型。</p>
                 <div className="flex gap-2">
+                  <ImportButton 
+                    onImport={(data) => setCertTypes(prev => [...prev, ...data])} 
+                    expectedHeaders={['證書類型名稱', '分類']}
+                    rowMapper={(row) => ({
+                      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                      name: row[0],
+                      category: row[1] === '人員證書' ? 'staff' : 'machine',
+                      createdAt: new Date().toISOString()
+                    })}
+                  />
                   <Button onClick={exportCertTypes} variant="outline" className="flex items-center gap-2">
                     <Download size={18} /> 匯出
                   </Button>
@@ -1220,6 +1313,17 @@ export default function App() {
         {showAddCert && (
           <Modal title="上傳證書資料" onClose={() => setShowAddCert(false)}>
             <AddCertForm staffList={staff} machineList={machines} certTypes={certTypes} onComplete={() => setShowAddCert(false)} onAdd={(newCert) => setCerts(prev => [...prev, newCert])} />
+          </Modal>
+        )}
+        {renewCert && (
+          <Modal title="展延證書" onClose={() => setRenewCert(null)}>
+            <RenewCertForm 
+              cert={renewCert} 
+              onComplete={() => setRenewCert(null)} 
+              onRenew={(newExpiryDate) => {
+                setCerts(prev => prev.map(c => c.id === renewCert.id ? { ...c, expiryDate: newExpiryDate } : c));
+              }} 
+            />
           </Modal>
         )}
         {confirmDelete && (
@@ -1452,6 +1556,101 @@ function StatCard({ label, value, icon, trend, variant = 'neutral' }: { label: s
   );
 }
 
+function InfoBlock({ label, value, highlight = false }: { label: string, value: string, highlight?: boolean }) {
+  return (
+    <div>
+      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">{label}</p>
+      <p className={cn("font-medium", highlight ? "text-red-600" : "text-slate-900")}>{value}</p>
+    </div>
+  );
+}
+
+function ImportButton({ onImport, expectedHeaders, rowMapper }: { onImport: (data: any[]) => void, expectedHeaders: string[], rowMapper: (row: string[]) => any }) {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const parseCSVRow = (row: string): string[] => {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < row.length; i++) {
+      const char = row[i];
+      if (char === '"') {
+        if (inQuotes && row[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        result.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    result.push(current);
+    return result;
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        let text = event.target?.result as string;
+        if (text.charCodeAt(0) === 0xFEFF) {
+          text = text.slice(1);
+        }
+        const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+        if (lines.length < 2) {
+          alert('匯入失敗：檔案為空或無資料列');
+          return;
+        }
+
+        const headers = parseCSVRow(lines[0]);
+        const headersMatch = expectedHeaders.every((h, i) => headers[i] === h);
+        if (!headersMatch) {
+          alert(`匯入失敗：檔案格式不符。預期標題為：${expectedHeaders.join(', ')}`);
+          return;
+        }
+
+        const data = [];
+        for (let i = 1; i < lines.length; i++) {
+          const row = parseCSVRow(lines[i]);
+          if (row.length >= expectedHeaders.length) {
+            data.push(rowMapper(row));
+          }
+        }
+        
+        onImport(data);
+        alert(`成功匯入 ${data.length} 筆資料`);
+      } catch (err) {
+        alert('匯入失敗：無效的 CSV 檔案或資料格式錯誤');
+      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <>
+      <input 
+        type="file" 
+        accept=".csv" 
+        className="hidden" 
+        ref={fileInputRef} 
+        onChange={handleFileChange} 
+      />
+      <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2">
+        <Upload size={16} />
+        匯入 CSV
+      </Button>
+    </>
+  );
+}
+
 function QuickActionBtn({ icon, label, onClick, className }: { icon: React.ReactNode, label: string, onClick: () => void, className?: string }) {
   return (
     <button 
@@ -1630,6 +1829,40 @@ function AddMachineForm({ onComplete, onAdd }: { onComplete: () => void, onAdd: 
       <div className="flex gap-3 justify-end">
         <Button type="button" variant="ghost" onClick={onComplete}>取消</Button>
         <Button type="submit" disabled={submitting}>{submitting ? '儲存中...' : '確認新增'}</Button>
+      </div>
+    </form>
+  );
+}
+
+function RenewCertForm({ cert, onComplete, onRenew }: { cert: Certificate, onComplete: () => void, onRenew: (newExpiryDate: string) => void }) {
+  const [newExpiryDate, setNewExpiryDate] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newExpiryDate) return;
+    setSubmitting(true);
+    setTimeout(() => {
+      onRenew(newExpiryDate);
+      setSubmitting(false);
+      onComplete();
+    }, 500);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl mb-4 text-sm">
+        <p><span className="text-slate-500">持有人/機械：</span> <span className="font-semibold text-slate-900">{cert.ownerName}</span></p>
+        <p><span className="text-slate-500">證書類型：</span> <span className="font-semibold text-slate-900">{cert.type}</span></p>
+        <p><span className="text-slate-500">原到期日：</span> <span className="font-semibold text-slate-900">{cert.expiryDate}</span></p>
+      </div>
+      <div className="space-y-1">
+        <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">新到期日期</label>
+        <input type="date" required value={newExpiryDate} onChange={e => setNewExpiryDate(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
+      </div>
+      <div className="flex justify-end gap-2 pt-4">
+        <Button type="button" variant="ghost" onClick={onComplete}>取消</Button>
+        <Button type="submit" disabled={submitting}>{submitting ? '處理中...' : '確認展延'}</Button>
       </div>
     </form>
   );

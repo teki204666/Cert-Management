@@ -11,33 +11,31 @@ export default function VerifyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<VerificationLog[]>([]);
+  const [verifierName, setVerifierName] = useState('');
+  const [verified, setVerified] = useState(false);
 
   useEffect(() => {
     async function fetchCert() {
       if (!certId) return;
       try {
-        // Mock data fetch
         setTimeout(() => {
-          if (certId === '1') {
-            setCert({
+          const allCerts = JSON.parse(localStorage.getItem('app_certs') || '[]');
+          // Fallback to mock data if empty (for testing)
+          if (allCerts.length === 0 && certId === '1') {
+            allCerts.push({
               id: '1', ownerType: 'staff', ownerId: '1', type: '勞工安全衛生管理員', certNumber: 'A001', 
               expiryDate: format(addDays(new Date(), 15), 'yyyy-MM-dd'), documentUrl: '', 
               ownerName: '王大明', contractNumber: 'TC-2026-001', status: 'valid', 
               createdAt: new Date().toISOString()
             });
-            
-            // Record verification log
-            const newLog: VerificationLog = {
-              id: Date.now().toString(),
-              certId: certId,
-              timestamp: new Date().toISOString(),
-              user: '訪客 (現場查驗)'
-            };
+          }
+          
+          const foundCert = allCerts.find((c: any) => c.id === certId);
+          
+          if (foundCert) {
+            setCert(foundCert);
             const existingLogs = JSON.parse(localStorage.getItem(`cert_logs_${certId}`) || '[]');
-            const updatedLogs = [newLog, ...existingLogs];
-            localStorage.setItem(`cert_logs_${certId}`, JSON.stringify(updatedLogs));
-            setLogs(updatedLogs);
-            
+            setLogs(existingLogs);
           } else {
             setError('找不到此證書資料');
           }
@@ -51,6 +49,24 @@ export default function VerifyPage() {
     }
     fetchCert();
   }, [certId]);
+
+  const handleVerify = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verifierName.trim() || !certId) return;
+    
+    const newLog: VerificationLog = {
+      id: Date.now().toString(),
+      certId: certId,
+      timestamp: new Date().toISOString(),
+      user: verifierName.trim()
+    };
+    const existingLogs = JSON.parse(localStorage.getItem(`cert_logs_${certId}`) || '[]');
+    const updatedLogs = [newLog, ...existingLogs];
+    localStorage.setItem(`cert_logs_${certId}`, JSON.stringify(updatedLogs));
+    setLogs(updatedLogs);
+    setVerified(true);
+    setVerifierName('');
+  };
 
   if (loading) return (
     <div className="h-screen flex items-center justify-center bg-slate-50 font-mono text-slate-400">
@@ -135,6 +151,31 @@ export default function VerifyPage() {
                 </a>
               </div>
             )}
+
+            <div className="pt-6 border-t border-slate-100">
+              <h4 className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-2 uppercase tracking-wider">
+                <ShieldCheck size={14} className="text-slate-400" /> 現場查驗簽名
+              </h4>
+              <form onSubmit={handleVerify} className="space-y-3">
+                <input 
+                  type="text" 
+                  value={verifierName}
+                  onChange={e => setVerifierName(e.target.value)}
+                  placeholder="請輸入您的姓名 (查驗員)" 
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm transition-all"
+                  required
+                />
+                <button 
+                  type="submit" 
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                >
+                  確認查驗並記錄
+                </button>
+                {verified && (
+                  <p className="text-xs text-emerald-600 text-center font-medium">查驗紀錄已成功儲存！</p>
+                )}
+              </form>
+            </div>
 
             <div className="pt-6 border-t border-slate-100">
               <h4 className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-2 uppercase tracking-wider">
