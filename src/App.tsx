@@ -27,7 +27,8 @@ import {
   ChevronDown,
   Building2,
   Settings,
-  Tags
+  Tags,
+  UserCircle
 } from 'lucide-react';
 import { format, addDays, isBefore, parseISO, differenceInDays, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay } from 'date-fns';
 import { QRCodeSVG } from 'qrcode.react';
@@ -76,18 +77,28 @@ const Badge = ({ children, variant = 'neutral' }: { children: React.ReactNode, v
 // --- Main App ---
 
 export default function App() {
-  const [user, setUser] = useState<any>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [user, setUser] = useState<any>(() => {
+    const saved = localStorage.getItem('app_current_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    const saved = localStorage.getItem('app_current_profile');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [staff, setStaff] = useState<Staff[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [certs, setCerts] = useState<Certificate[]>([]);
   const [certTypes, setCertTypes] = useState<CertType[]>([]);
-  const [allUsers, setAllUsers] = useState<UserProfile[]>([
-    { uid: 'mock-uid', email: 'tekii.wtf@gmail.com', displayName: 'Admin User', role: 'admin', password: 'password123' },
-    { uid: 'mock-uid-2', email: 'teki204666@gmail.com', displayName: 'Admin User 2', role: 'admin', password: 'password123' },
-    { uid: 'mock-staff-uid', email: 'staff@example.com', displayName: 'Staff User', role: 'staff', password: 'password123' }
-  ]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'staff' | 'machines' | 'certs' | 'certTypes' | 'settings' | 'contracts'>('dashboard');
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(() => {
+    const saved = localStorage.getItem('app_all_users');
+    if (saved) return JSON.parse(saved);
+    return [
+      { uid: 'mock-uid', userId: 'admin', displayName: 'Admin User', role: 'admin', password: 'password123' },
+      { uid: 'mock-uid-2', userId: 'teki204666', displayName: 'Admin User 2', role: 'admin', password: 'password123' },
+      { uid: 'mock-staff-uid', userId: 'staff', displayName: 'Staff User', role: 'staff', password: 'password123' }
+    ];
+  });
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'staff' | 'machines' | 'certs' | 'certTypes' | 'settings' | 'contracts' | 'profile'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [showAddStaff, setShowAddStaff] = useState(false);
@@ -105,7 +116,7 @@ export default function App() {
   const [certSort, setCertSort] = useState<{key: keyof Certificate, dir: 'asc'|'desc'}>({key: 'expiryDate', dir: 'asc'});
   const [showAddUser, setShowAddUser] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserId, setNewUserId] = useState('');
   const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState('staff');
   const [newUserPassword, setNewUserPassword] = useState('');
@@ -113,8 +124,35 @@ export default function App() {
 
   const [notificationDays, setNotificationDays] = useState(30);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [loginEmail, setLoginEmail] = useState('');
+  const [loginId, setLoginId] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+
+  // Profile state
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profileNotif, setProfileNotif] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [profileMsg, setProfileMsg] = useState('');
+
+  // Persist state
+  useEffect(() => {
+    localStorage.setItem('app_all_users', JSON.stringify(allUsers));
+  }, [allUsers]);
+
+  useEffect(() => {
+    if (user) localStorage.setItem('app_current_user', JSON.stringify(user));
+    else localStorage.removeItem('app_current_user');
+  }, [user]);
+
+  useEffect(() => {
+    if (profile) {
+      localStorage.setItem('app_current_profile', JSON.stringify(profile));
+      setProfileEmail(profile.email || '');
+      setProfileNotif(profile.emailNotifications || false);
+    } else {
+      localStorage.removeItem('app_current_profile');
+    }
+  }, [profile]);
 
   // Auth Listener
   useEffect(() => {
@@ -147,14 +185,14 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const registeredUser = allUsers.find(u => u.email.toLowerCase() === loginEmail.toLowerCase());
+      const registeredUser = allUsers.find(u => u.userId.toLowerCase() === loginId.toLowerCase());
       
       if (registeredUser && registeredUser.password === loginPassword) {
-        setUser({ uid: registeredUser.uid, email: registeredUser.email, displayName: registeredUser.displayName });
+        setUser({ uid: registeredUser.uid, userId: registeredUser.userId, displayName: registeredUser.displayName });
         setProfile(registeredUser);
         setLoginError(null);
       } else {
-        setLoginError('Email 或密碼錯誤，請重新輸入。');
+        setLoginError('User ID 或密碼錯誤，請重新輸入。');
       }
     } catch (error: any) {
       console.error("Login error:", error);
@@ -162,10 +200,40 @@ export default function App() {
     }
   };
 
+  const handleUpdateProfile = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile) return;
+    
+    if (currentPwd || newPwd) {
+      if (currentPwd !== profile.password) {
+        setProfileMsg('當前密碼錯誤');
+        return;
+      }
+      if (!newPwd) {
+        setProfileMsg('請輸入新密碼');
+        return;
+      }
+    }
+
+    const updatedUser = { 
+      ...profile, 
+      email: profileEmail, 
+      emailNotifications: profileNotif 
+    };
+    if (newPwd) updatedUser.password = newPwd;
+
+    setAllUsers(prev => prev.map(u => u.uid === profile.uid ? updatedUser : u));
+    setProfile(updatedUser);
+    setProfileMsg('設定已更新');
+    setCurrentPwd('');
+    setNewPwd('');
+    setTimeout(() => setProfileMsg(''), 3000);
+  };
+
   const handleLogout = async () => {
     setUser(null);
     setProfile(null);
-    setLoginEmail('');
+    setLoginId('');
     setLoginPassword('');
   };
 
@@ -201,17 +269,17 @@ export default function App() {
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUserEmail.trim() || !newUserName.trim() || !newUserPassword.trim()) return;
+    if (!newUserId.trim() || !newUserName.trim() || !newUserPassword.trim()) return;
     const newUser: UserProfile = {
       uid: Date.now().toString(),
-      email: newUserEmail.trim(),
+      userId: newUserId.trim(),
       role: newUserRole as Role,
       displayName: newUserName.trim(),
       password: newUserPassword
     };
     setAllUsers(prev => [...prev, newUser]);
     setShowAddUser(false);
-    setNewUserEmail('');
+    setNewUserId('');
     setNewUserName('');
     setNewUserRole('staff');
     setNewUserPassword('');
@@ -257,10 +325,10 @@ export default function App() {
             <p className="text-sm text-slate-600">請輸入管理員為您建立的帳號密碼登入系統。</p>
             <form onSubmit={handleLogin} className="space-y-4">
               <input 
-                type="email" 
-                value={loginEmail}
-                onChange={e => setLoginEmail(e.target.value)}
-                placeholder="輸入 Email" 
+                type="text" 
+                value={loginId}
+                onChange={e => setLoginId(e.target.value)}
+                placeholder="輸入 User ID" 
                 className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all"
                 required
               />
@@ -441,6 +509,12 @@ export default function App() {
               onClick={() => { setActiveTab('settings'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
             />
           )}
+          <NavItem 
+            icon={<UserCircle size={18} />} 
+            label="個人設定" 
+            active={activeTab === 'profile'} 
+            onClick={() => { setActiveTab('profile'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+          />
           <div className="flex items-center gap-3 p-2.5 rounded-lg bg-slate-800/50 mt-2">
             <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-inner">
               {user.displayName?.[0] || 'U'}
@@ -471,6 +545,7 @@ export default function App() {
               {activeTab === 'certs' && '證書清單'}
               {activeTab === 'certTypes' && '證書類型管理'}
               {activeTab === 'settings' && '權限與設定'}
+              {activeTab === 'profile' && '個人設定'}
               {activeTab === 'contracts' && '工程合約'}
             </h2>
           </div>
@@ -999,7 +1074,7 @@ export default function App() {
           {activeTab === 'settings' && profile?.role === 'admin' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex items-center justify-between">
-                <p className="text-slate-500 text-sm">管理系統使用者權限。您可以預先加入使用者的 Email 並設定權限。</p>
+                <p className="text-slate-500 text-sm">管理系統使用者權限。您可以預先加入使用者的 ID 並設定權限。</p>
                 <div className="flex items-center gap-4">
                   <Button onClick={() => setShowAddUser(true)} className="flex items-center gap-2">
                     <Plus size={18} /> 預先加入使用者
@@ -1010,7 +1085,7 @@ export default function App() {
               <Card>
                 <div className="grid grid-cols-[1.5fr_1.5fr_1fr_120px] p-4 border-b border-slate-200 bg-slate-50/50">
                   <span className="col-header">使用者名稱</span>
-                  <span className="col-header">Email</span>
+                  <span className="col-header">User ID</span>
                   <span className="col-header">目前權限</span>
                   <span className="col-header">操作</span>
                 </div>
@@ -1018,18 +1093,18 @@ export default function App() {
                   <div className="p-12 text-center text-slate-400 italic text-sm">載入中...</div>
                 ) : (
                   allUsers.map(u => {
-                    const docId = u.email || u.uid;
+                    const docId = u.uid;
                     return (
                     <div key={docId} className="data-row grid-cols-[1.5fr_1.5fr_1fr_120px] p-4">
                       <p className="font-semibold text-slate-900">{u.displayName}</p>
-                      <p className="text-sm text-slate-500">{u.email}</p>
+                      <p className="text-sm text-slate-500">{u.userId}</p>
                       <div>
                         <Badge variant={u.role === 'admin' ? 'warning' : 'neutral'}>
                           {u.role === 'admin' ? '管理員' : '一般人員'}
                         </Badge>
                       </div>
                       <div className="flex gap-2">
-                        {u.email !== 'tekii.wtf@gmail.com' && (
+                        {u.userId !== 'admin' && (
                           <>
                             <select 
                               value={u.role}
@@ -1054,6 +1129,79 @@ export default function App() {
               </Card>
             </motion.div>
           )}
+          {activeTab === 'profile' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-2xl space-y-6">
+              <Card className="p-6 space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">個人設定</h3>
+                  <p className="text-sm text-slate-500">更新您的密碼與通知設定</p>
+                </div>
+                
+                {profileMsg && (
+                  <div className={cn("p-3 text-sm rounded-lg", profileMsg === '設定已更新' ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200")}>
+                    {profileMsg}
+                  </div>
+                )}
+
+                <form onSubmit={handleUpdateProfile} className="space-y-6">
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-semibold text-slate-900 border-b border-slate-100 pb-2">聯絡資訊</h4>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">聯絡 Email</label>
+                      <input 
+                        type="email"
+                        value={profileEmail} 
+                        onChange={e => setProfileEmail(e.target.value)} 
+                        placeholder="輸入 Email 以接收通知"
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" 
+                      />
+                    </div>
+                    <label className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={profileNotif}
+                        onChange={e => setProfileNotif(e.target.checked)}
+                        className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <div className="flex flex-col">
+                        <span className="text-sm font-medium text-slate-900">接收證書到期通知</span>
+                        <span className="text-xs text-slate-500">當證書即將到期時，發送 Email 通知我</span>
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="space-y-4 pt-4">
+                    <h4 className="text-sm font-semibold text-slate-900 border-b border-slate-100 pb-2">變更密碼</h4>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">當前密碼</label>
+                      <input 
+                        type="password"
+                        value={currentPwd} 
+                        onChange={e => setCurrentPwd(e.target.value)} 
+                        placeholder="若不更改密碼請留空"
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" 
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">新密碼</label>
+                      <input 
+                        type="password"
+                        value={newPwd} 
+                        onChange={e => setNewPwd(e.target.value)} 
+                        placeholder="輸入新密碼"
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" 
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-4 flex justify-end">
+                    <Button type="submit">儲存設定</Button>
+                  </div>
+                </form>
+              </Card>
+            </motion.div>
+          )}
+
         </div>
       </main>
 
@@ -1166,12 +1314,12 @@ export default function App() {
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">使用者 Email</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">使用者 ID</label>
                     <input 
                       required 
-                      type="email"
-                      value={newUserEmail} 
-                      onChange={e => setNewUserEmail(e.target.value)} 
+                      type="text"
+                      value={newUserId} 
+                      onChange={e => setNewUserId(e.target.value)} 
                       className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" 
                     />
                   </div>

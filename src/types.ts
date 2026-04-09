@@ -2,11 +2,13 @@ export type Role = "admin" | "staff" | "guest";
 
 export interface UserProfile {
   uid: string;
-  email: string;
+  userId: string;
   displayName: string;
   role: Role;
   staffId?: string;
   password?: string;
+  email?: string;
+  emailNotifications?: boolean;
 }
 
 export interface Staff {
