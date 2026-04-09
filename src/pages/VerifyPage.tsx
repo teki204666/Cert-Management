@@ -1,33 +1,51 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { db } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { ShieldCheck, XCircle, CheckCircle2, AlertTriangle, FileBadge, ArrowLeft } from 'lucide-react';
-import { isBefore, parseISO, format } from 'date-fns';
+import { ShieldCheck, XCircle, CheckCircle2, AlertTriangle, FileBadge, ArrowLeft, Clock } from 'lucide-react';
+import { isBefore, parseISO, format, addDays } from 'date-fns';
 import { motion } from 'motion/react';
-import type { Certificate } from '../types';
+import type { Certificate, VerificationLog } from '../types';
 
 export default function VerifyPage() {
   const { certId } = useParams<{ certId: string }>();
   const [cert, setCert] = useState<Certificate | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<VerificationLog[]>([]);
 
   useEffect(() => {
     async function fetchCert() {
       if (!certId) return;
       try {
-        const docRef = doc(db, 'certificates', certId);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setCert({ id: docSnap.id, ...docSnap.data() } as Certificate);
-        } else {
-          setError('找不到此證照資料');
-        }
+        // Mock data fetch
+        setTimeout(() => {
+          if (certId === '1') {
+            setCert({
+              id: '1', ownerType: 'staff', ownerId: '1', type: '勞工安全衛生管理員', certNumber: 'A001', 
+              expiryDate: format(addDays(new Date(), 15), 'yyyy-MM-dd'), documentUrl: '', 
+              ownerName: '王大明', contractNumber: 'TC-2026-001', status: 'valid', 
+              createdAt: new Date().toISOString()
+            });
+            
+            // Record verification log
+            const newLog: VerificationLog = {
+              id: Date.now().toString(),
+              certId: certId,
+              timestamp: new Date().toISOString(),
+              user: '訪客 (現場查驗)'
+            };
+            const existingLogs = JSON.parse(localStorage.getItem(`cert_logs_${certId}`) || '[]');
+            const updatedLogs = [newLog, ...existingLogs];
+            localStorage.setItem(`cert_logs_${certId}`, JSON.stringify(updatedLogs));
+            setLogs(updatedLogs);
+            
+          } else {
+            setError('找不到此證書資料');
+          }
+          setLoading(false);
+        }, 500);
       } catch (err) {
         console.error(err);
         setError('讀取資料時發生錯誤');
-      } finally {
         setLoading(false);
       }
     }
@@ -66,7 +84,7 @@ export default function VerifyPage() {
           <div className="inline-flex p-3 bg-slate-900 text-white rounded-2xl shadow-xl shadow-slate-900/10 mb-4">
             <ShieldCheck size={32} strokeWidth={1.5} />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">證照現場查驗系統</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">證書現場查驗系統</h1>
           <p className="text-xs text-slate-500 uppercase tracking-widest mt-1 font-medium">Official Verification Portal</p>
         </div>
 
@@ -83,7 +101,7 @@ export default function VerifyPage() {
                 <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-100 text-red-600 ring-8 ring-red-50 mb-2">
                   <XCircle size={32} />
                 </div>
-                <h2 className="text-2xl font-bold text-red-700 tracking-tight">證照已過期</h2>
+                <h2 className="text-2xl font-bold text-red-700 tracking-tight">證書已過期</h2>
                 <p className="text-xs text-red-600/80 uppercase font-bold tracking-widest">Status: Expired</p>
               </div>
             ) : (
@@ -91,7 +109,7 @@ export default function VerifyPage() {
                 <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 mb-2">
                   <CheckCircle2 size={32} />
                 </div>
-                <h2 className="text-2xl font-bold text-emerald-700 tracking-tight">證照有效</h2>
+                <h2 className="text-2xl font-bold text-emerald-700 tracking-tight">證書有效</h2>
                 <p className="text-xs text-emerald-600/80 uppercase font-bold tracking-widest">Status: Valid</p>
               </div>
             )}
@@ -99,9 +117,9 @@ export default function VerifyPage() {
 
           <div className="p-8 space-y-8">
             <div className="grid grid-cols-2 gap-y-6 gap-x-4">
-              <InfoBlock label="持有人" value={cert.staffName} />
-              <InfoBlock label="證照類型" value={cert.type} />
-              <InfoBlock label="證照編號" value={cert.certNumber} />
+              <InfoBlock label={cert.ownerType === 'machine' ? '機械名稱' : '持有人'} value={cert.ownerName} />
+              <InfoBlock label="證書類型" value={cert.type} />
+              <InfoBlock label="證書編號" value={cert.certNumber} />
               <InfoBlock label="到期日期" value={cert.expiryDate} highlight={isExpired} />
             </div>
 
@@ -113,25 +131,32 @@ export default function VerifyPage() {
                   rel="noreferrer"
                   className="flex items-center justify-center gap-2 w-full py-3.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 transition-colors shadow-sm"
                 >
-                  <FileBadge size={18} className="text-slate-400" /> 查看實體證照掃描檔
+                  <FileBadge size={18} className="text-slate-400" /> 查看實體證書掃描檔
                 </a>
               </div>
             )}
 
             <div className="pt-6 border-t border-slate-100">
-              <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl border border-slate-100">
-                <FileBadge className="text-slate-400" size={24} />
-                <div className="flex-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-0.5">系統查驗時間</p>
-                  <p className="text-sm font-mono text-slate-700">{format(new Date(), 'yyyy-MM-dd HH:mm:ss')}</p>
-                </div>
+              <h4 className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-2 uppercase tracking-wider">
+                <Clock size={14} className="text-slate-400" /> 查驗紀錄
+              </h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
+                {logs.map(log => (
+                  <div key={log.id} className="flex justify-between items-center p-2.5 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck size={14} className="text-emerald-500" />
+                      <span className="font-mono text-slate-600">{format(parseISO(log.timestamp), 'yyyy-MM-dd HH:mm:ss')}</span>
+                    </div>
+                    <span className="text-slate-500 bg-white px-2 py-1 rounded border border-slate-100">{log.user}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
 
         <p className="mt-8 text-center text-[10px] text-slate-400 uppercase tracking-[0.2em] font-semibold">
-          &copy; 2026 工程人員證照管理系統
+          &copy; 2026 工程人員證書管理系統
         </p>
       </motion.div>
     </div>

@@ -4,9 +4,6 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { auth, db } from './firebase';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import { 
   LayoutDashboard, 
   Users, 
@@ -36,8 +33,7 @@ import { format, addDays, isBefore, parseISO, differenceInDays, startOfMonth, en
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
-import { deleteDoc, doc, setDoc, getDoc } from 'firebase/firestore';
-import type { Staff, Certificate, UserProfile, Role, CertType } from './types';
+import type { Staff, Machine, Certificate, UserProfile, Role, CertType, VerificationLog } from './types';
 
 // --- Components ---
 
@@ -83,17 +79,19 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [staff, setStaff] = useState<Staff[]>([]);
+  const [machines, setMachines] = useState<Machine[]>([]);
   const [certs, setCerts] = useState<Certificate[]>([]);
   const [certTypes, setCertTypes] = useState<CertType[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'staff' | 'certs' | 'certTypes' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'staff' | 'machines' | 'certs' | 'certTypes' | 'settings' | 'contracts'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [showAddStaff, setShowAddStaff] = useState(false);
+  const [showAddMachine, setShowAddMachine] = useState(false);
   const [showAddCert, setShowAddCert] = useState(false);
   const [activeContract, setActiveContract] = useState<string | null>(null);
   const [isContractsOpen, setIsContractsOpen] = useState(true);
-  const [confirmDelete, setConfirmDelete] = useState<{type: 'staff'|'cert'|'certType', id: string, name?: string} | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{type: 'staff'|'machine'|'cert'|'certType', id: string, name?: string} | null>(null);
   const [confirmRoleChange, setConfirmRoleChange] = useState<{docId: string, name: string, newRole: string} | null>(null);
   const [confirmDeleteUser, setConfirmDeleteUser] = useState<{docId: string, name: string} | null>(null);
   const [showAddCertType, setShowAddCertType] = useState(false);
@@ -106,196 +104,114 @@ export default function App() {
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState('staff');
-  const [allowStaffEdit, setAllowStaffEdit] = useState(false);
+  const [detailCert, setDetailCert] = useState<Certificate | null>(null);
 
   const [notificationDays, setNotificationDays] = useState(30);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      if (u) {
-        try {
-          const emailId = u.email || u.uid;
-          const userDocRef = doc(db, 'users', emailId);
-          const userDoc = await getDoc(userDocRef);
-          
-          if (userDoc.exists()) {
-            // Update uid if missing (for pre-registered users)
-            if (!userDoc.data().uid) {
-              await setDoc(userDocRef, { uid: u.uid, displayName: u.displayName || userDoc.data().displayName || 'User' }, { merge: true });
-            }
-            setProfile({ ...userDoc.data(), uid: u.uid } as UserProfile);
-            setUser(u);
-            setLoginError(null);
-          } else {
-            // Check legacy uid document
-            const legacyDocRef = doc(db, 'users', u.uid);
-            const legacyDoc = await getDoc(legacyDocRef);
-            if (legacyDoc.exists()) {
-              setProfile(legacyDoc.data() as UserProfile);
-              setUser(u);
-              setLoginError(null);
-            } else {
-              const isFirstUser = u.email === "tekii.wtf@gmail.com";
-              if (isFirstUser) {
-                const newProfile: UserProfile = {
-                  uid: u.uid,
-                  email: u.email || '',
-                  displayName: u.displayName || 'User',
-                  role: 'admin'
-                };
-                await setDoc(userDocRef, newProfile);
-                setProfile(newProfile);
-                setUser(u);
-                setLoginError(null);
-              } else {
-                // Reject login for non-pre-registered users
-                await signOut(auth);
-                setLoginError("登入失敗：您的 Email 尚未被加入系統，請聯絡管理員。");
-                setUser(null);
-                setProfile(null);
-              }
-            }
-          }
-        } catch (err) {
-          console.error("Error fetching user profile:", err);
-          // Fallback profile if permission denied or other error
-          setProfile({
-            uid: u.uid,
-            email: u.email || '',
-            displayName: u.displayName || 'User',
-            role: 'staff'
-          });
-          setUser(u);
-        }
-      } else {
-        setUser(null);
-        setProfile(null);
-      }
+    const timer = setTimeout(() => {
       setLoading(false);
-    });
-    return unsubscribe;
+    }, 300);
+    return () => clearTimeout(timer);
   }, []);
 
   // Data Listeners
   useEffect(() => {
     if (!user) return;
 
-    const staffUnsubscribe = onSnapshot(collection(db, 'staff'), (snapshot) => {
-      setStaff(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Staff)));
-    });
-
-    const certsUnsubscribe = onSnapshot(collection(db, 'certificates'), (snapshot) => {
-      setCerts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Certificate)));
-    });
-
-    const certTypesUnsubscribe = onSnapshot(collection(db, 'certTypes'), (snapshot) => {
-      setCertTypes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CertType)));
-    });
-
-    const usersUnsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
-      setAllUsers(snapshot.docs.map(doc => doc.data() as UserProfile));
-    });
-
-    const settingsUnsubscribe = onSnapshot(doc(db, 'systemSettings', 'global'), (docSnap) => {
-      if (docSnap.exists()) {
-        setAllowStaffEdit(docSnap.data().allowStaffEdit === true);
-        setNotificationDays(docSnap.data().notificationDays || 30);
-      } else {
-        setAllowStaffEdit(false);
-        setNotificationDays(30);
-      }
-    });
-
-    return () => {
-      staffUnsubscribe();
-      certsUnsubscribe();
-      certTypesUnsubscribe();
-      usersUnsubscribe();
-      settingsUnsubscribe();
-    };
+    setStaff([
+      { id: '1', name: '王大明', staffNumber: 'EMP001', department: '工程部', contractNumber: 'TC-2026-001', createdAt: new Date().toISOString() }
+    ]);
+    setMachines([
+      { id: '1', name: '挖土機', machineNumber: 'EXC-001', department: '工程部', contractNumber: 'TC-2026-001', createdAt: new Date().toISOString() }
+    ]);
+    setCerts([
+      { id: '1', ownerType: 'staff', ownerId: '1', type: '勞工安全衛生管理員', certNumber: 'A001', expiryDate: format(addDays(new Date(), 15), 'yyyy-MM-dd'), documentUrl: '', ownerName: '王大明', contractNumber: 'TC-2026-001', status: 'valid', createdAt: new Date().toISOString() }
+    ]);
+    setCertTypes([
+      { id: '1', name: '勞工安全衛生管理員', category: 'staff', createdAt: new Date().toISOString() },
+      { id: '2', name: '起重機操作證', category: 'machine', createdAt: new Date().toISOString() }
+    ]);
+    setAllUsers([
+      { uid: 'mock-uid', email: 'tekii.wtf@gmail.com', displayName: 'Admin User', role: 'admin' }
+    ]);
+    setNotificationDays(30);
   }, [user]);
 
   const handleLogin = () => {
-    const provider = new GoogleAuthProvider();
-    signInWithPopup(auth, provider);
+    const mockUser = {
+      uid: 'mock-uid',
+      email: 'tekii.wtf@gmail.com',
+      displayName: 'Admin User',
+    };
+    setUser(mockUser);
+    setProfile({ ...mockUser, role: 'admin' } as UserProfile);
+    setLoginError(null);
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => {
+    setUser(null);
+    setProfile(null);
+  };
 
   const handleDelete = async () => {
     if (!confirmDelete) return;
-    try {
-      if (confirmDelete.type === 'staff') {
-        await deleteDoc(doc(db, 'staff', confirmDelete.id));
-      } else if (confirmDelete.type === 'cert') {
-        await deleteDoc(doc(db, 'certificates', confirmDelete.id));
-      } else if (confirmDelete.type === 'certType') {
-        await deleteDoc(doc(db, 'certTypes', confirmDelete.id));
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setConfirmDelete(null);
+    if (confirmDelete.type === 'staff') {
+      setStaff(prev => prev.filter(s => s.id !== confirmDelete.id));
+    } else if (confirmDelete.type === 'machine') {
+      setMachines(prev => prev.filter(m => m.id !== confirmDelete.id));
+    } else if (confirmDelete.type === 'cert') {
+      setCerts(prev => prev.filter(c => c.id !== confirmDelete.id));
+    } else if (confirmDelete.type === 'certType') {
+      setCertTypes(prev => prev.filter(c => c.id !== confirmDelete.id));
     }
+    setConfirmDelete(null);
   };
 
   const handleAddCertType = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCertTypeName.trim()) return;
-    try {
-      await addDoc(collection(db, 'certTypes'), {
-        name: newCertTypeName.trim(),
-        createdAt: serverTimestamp()
-      });
-      setShowAddCertType(false);
-      setNewCertTypeName('');
-    } catch (err) {
-      console.error(err);
-    }
+    const categoryElement = document.getElementById('certTypeCategory') as HTMLSelectElement;
+    const category = (categoryElement?.value as 'staff' | 'machine') || 'staff';
+    const newType: CertType = {
+      id: Date.now().toString(),
+      name: newCertTypeName.trim(),
+      category: category,
+      createdAt: new Date().toISOString()
+    };
+    setCertTypes(prev => [...prev, newType]);
+    setShowAddCertType(false);
+    setNewCertTypeName('');
   };
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserEmail.trim() || !newUserName.trim()) return;
-    try {
-      // Use email as document ID for pre-registered users
-      await setDoc(doc(db, 'users', newUserEmail.trim()), {
-        email: newUserEmail.trim(),
-        role: newUserRole,
-        displayName: newUserName.trim(),
-        uid: '' // Will be updated when they log in
-      });
-      setShowAddUser(false);
-      setNewUserEmail('');
-      setNewUserName('');
-      setNewUserRole('staff');
-    } catch (err) {
-      console.error(err);
-    }
+    const newUser: UserProfile = {
+      uid: Date.now().toString(),
+      email: newUserEmail.trim(),
+      role: newUserRole as Role,
+      displayName: newUserName.trim()
+    };
+    setAllUsers(prev => [...prev, newUser]);
+    setShowAddUser(false);
+    setNewUserEmail('');
+    setNewUserName('');
+    setNewUserRole('staff');
   };
 
   const handleRoleChange = async () => {
     if (!confirmRoleChange) return;
-    try {
-      await setDoc(doc(db, 'users', confirmRoleChange.docId), { role: confirmRoleChange.newRole }, { merge: true });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setConfirmRoleChange(null);
-    }
+    setAllUsers(prev => prev.map(u => u.uid === confirmRoleChange.docId ? { ...u, role: confirmRoleChange.newRole as Role } : u));
+    setConfirmRoleChange(null);
   };
 
   const handleDeleteUser = async () => {
     if (!confirmDeleteUser) return;
-    try {
-      await deleteDoc(doc(db, 'users', confirmDeleteUser.docId));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setConfirmDeleteUser(null);
-    }
+    setAllUsers(prev => prev.filter(u => u.uid !== confirmDeleteUser.docId));
+    setConfirmDeleteUser(null);
   };
 
   if (loading) return <div className="h-screen flex items-center justify-center font-mono">INITIALIZING_SYSTEM...</div>;
@@ -313,7 +229,7 @@ export default function App() {
               <Building2 size={40} strokeWidth={1.5} />
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">泰錦建築工程有限公司</h1>
-            <p className="text-slate-500 text-sm">工程人員證照管理系統</p>
+            <p className="text-slate-500 text-sm">工程人員證書管理系統</p>
           </div>
           
           <Card className="p-8 space-y-6 shadow-lg shadow-slate-200/50 border-slate-200/60">
@@ -350,12 +266,12 @@ export default function App() {
 
   const expired = certs.filter(c => isBefore(parseISO(c.expiryDate), new Date()));
 
-  const uniqueContracts = Array.from(new Set(staff.map(s => s.contractNumber).filter(Boolean))) as string[];
+  const uniqueContracts = Array.from(new Set([
+    ...staff.map(s => s.contractNumber),
+    ...machines.map(m => m.contractNumber)
+  ].filter(Boolean))) as string[];
   const filteredStaff = activeContract ? staff.filter(s => s.contractNumber === activeContract) : staff;
-  const filteredCerts = activeContract ? certs.filter(c => {
-    const s = staff.find(st => st.id === c.staffId);
-    return s?.contractNumber === activeContract;
-  }) : certs;
+  const filteredCerts = activeContract ? certs.filter(c => c.contractNumber === activeContract) : certs;
 
   const sortedStaff = [...filteredStaff].sort((a, b) => {
     const aVal = String(a[staffSort.key] || '');
@@ -381,127 +297,96 @@ export default function App() {
     setCertSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }));
   };
 
-  const exportToCSV = () => {
-    const headers = ['持有人', '工號', '部門', '證照類型', '證照編號', '到期日', '狀態', '檔案連結'];
-    const rows = certs.map(c => {
-      const staffInfo = staff.find(s => s.id === c.staffId);
-      const isExpired = isBefore(parseISO(c.expiryDate), new Date());
-      const statusStr = isExpired ? '已過期' : '有效';
-      
-      return [
-        c.staffName,
-        staffInfo?.staffNumber || '',
-        staffInfo?.department || '',
-        c.type,
-        c.certNumber,
-        c.expiryDate,
-        statusStr,
-        c.documentUrl || ''
-      ];
-    });
-
-    // Add BOM for Excel UTF-8 compatibility
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.map(item => `"${item}"`).join(','))].join('\n');
+  const exportDataToCSV = (filename: string, headers: string[], rows: any[][]) => {
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.map(item => `"${String(item || '').replace(/"/g, '""')}"`).join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `證照資料匯出_${format(new Date(), 'yyyyMMdd')}.csv`);
+    link.setAttribute('download', `${filename}_${format(new Date(), 'yyyyMMdd')}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
+  const exportStaff = () => exportDataToCSV('人員清單', ['姓名', '工號', '部門', '合約編號'], staff.map(s => [s.name, s.staffNumber, s.department, s.contractNumber]));
+  const exportMachines = () => exportDataToCSV('機械清單', ['機械名稱', '機械編號', '部門', '合約編號'], machines.map(m => [m.name, m.machineNumber, m.department, m.contractNumber]));
+  const exportCerts = () => exportDataToCSV('證書清單', ['持有人/機械', '類型', '證書類型', '證書編號', '到期日', '狀態'], certs.map(c => [c.ownerName, c.ownerType === 'staff' ? '人員' : '機械', c.type, c.certNumber, c.expiryDate, isBefore(parseISO(c.expiryDate), new Date()) ? '已過期' : '有效']));
+  const exportCertTypes = () => exportDataToCSV('證書類型清單', ['證書類型名稱', '分類'], certTypes.map(ct => [ct.name, ct.category === 'staff' ? '人員證書' : '機械證書']));
+  const exportContracts = () => exportDataToCSV('工程合約清單', ['合約編號', '持有人/機械', '證書類型', '證書編號', '到期日', '狀態'], certs.filter(c => c.contractNumber).map(c => [c.contractNumber, c.ownerName, c.type, c.certNumber, c.expiryDate, isBefore(parseISO(c.expiryDate), new Date()) ? '已過期' : '有效']));
+
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
+      {/* Mobile Overlay */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+      )}
+      
       {/* Sidebar */}
-      <motion.aside 
-        initial={false}
-        animate={{ width: isSidebarOpen ? 260 : 80 }}
-        className="bg-slate-900 text-slate-300 flex flex-col z-20 border-r border-slate-800"
+      <aside 
+        className={cn(
+          "bg-slate-900 text-slate-300 flex flex-col z-50 border-r border-slate-800 transition-transform duration-300",
+          "fixed inset-y-0 left-0 md:relative w-[260px]",
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        )}
       >
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800/50">
-          {isSidebarOpen && (
-            <div className="flex items-center gap-2 text-white">
-              <Building2 size={20} className="text-blue-500" />
-              <span className="font-bold tracking-tight text-sm">泰錦建築工程</span>
-            </div>
-          )}
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1.5 hover:bg-slate-800 rounded-md text-slate-400 transition-colors">
-            {isSidebarOpen ? <X size={18} /> : <Menu size={18} />}
+          <div className="flex items-center gap-2 text-white">
+            <Building2 size={20} className="text-blue-500" />
+            <span className="font-bold tracking-tight text-sm">泰錦建築工程</span>
+          </div>
+          <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 hover:bg-slate-800 rounded-md text-slate-400 transition-colors md:hidden">
+            <X size={18} />
           </button>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 space-y-6">
           <div className="px-3 space-y-1">
-            <p className={cn("px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2", !isSidebarOpen && "text-center px-0")}>
-              {isSidebarOpen ? "主選單" : "主"}
+            <p className="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              主選單
             </p>
             <NavItem 
               icon={<LayoutDashboard size={18} />} 
               label="總覽儀表板" 
-              active={activeTab === 'dashboard' && !activeContract} 
-              collapsed={!isSidebarOpen}
-              onClick={() => { setActiveTab('dashboard'); setActiveContract(null); }}
+              active={activeTab === 'dashboard'} 
+              onClick={() => { setActiveTab('dashboard'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
             />
             <NavItem 
               icon={<Users size={18} />} 
-              label="所有人員" 
-              active={activeTab === 'staff' && !activeContract} 
-              collapsed={!isSidebarOpen}
-              onClick={() => { setActiveTab('staff'); setActiveContract(null); }}
+              label="人員管理" 
+              active={activeTab === 'staff'} 
+              onClick={() => { setActiveTab('staff'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+            />
+            <NavItem 
+              icon={<Building2 size={18} />} 
+              label="機械管理" 
+              active={activeTab === 'machines'} 
+              onClick={() => { setActiveTab('machines'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
             />
             <NavItem 
               icon={<FileBadge size={18} />} 
-              label="所有證照" 
-              active={activeTab === 'certs' && !activeContract} 
-              collapsed={!isSidebarOpen}
-              onClick={() => { setActiveTab('certs'); setActiveContract(null); }}
+              label="證書清單" 
+              active={activeTab === 'certs'} 
+              onClick={() => { setActiveTab('certs'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
             />
-          </div>
-
-          {profile?.role === 'admin' && (
-            <div className="px-3 space-y-1">
-              <p className={cn("px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2", !isSidebarOpen && "text-center px-0")}>
-                {isSidebarOpen ? "系統管理" : "管"}
-              </p>
-              <NavItem 
-                icon={<Tags size={18} />} 
-                label="證照類型管理" 
-                active={activeTab === 'certTypes'} 
-                collapsed={!isSidebarOpen}
-                onClick={() => { setActiveTab('certTypes'); setActiveContract(null); }}
-              />
-              <NavItem 
-                icon={<Settings size={18} />} 
-                label="權限與設定" 
-                active={activeTab === 'settings'} 
-                collapsed={!isSidebarOpen}
-                onClick={() => { setActiveTab('settings'); setActiveContract(null); }}
-              />
-            </div>
-          )}
-
-          <div className="px-3">
-            <button 
-              onClick={() => setIsContractsOpen(!isContractsOpen)} 
-              className={cn("w-full flex items-center justify-between px-3 py-2 text-slate-400 hover:text-slate-200 transition-colors rounded-lg hover:bg-slate-800", !isSidebarOpen && "justify-center")}
-            >
-              <div className="flex items-center gap-3">
-                <Folder size={18} />
-                {isSidebarOpen && <span className="text-sm font-medium">依合約分類</span>}
-              </div>
-              {isSidebarOpen && (
-                <ChevronDown size={16} className={cn("transition-transform", !isContractsOpen && "-rotate-90")} />
-              )}
-            </button>
-            
-            {isSidebarOpen && isContractsOpen && (
+            <NavItem 
+              icon={<Tags size={18} />} 
+              label="證書類型管理" 
+              active={activeTab === 'certTypes'} 
+              onClick={() => { setActiveTab('certTypes'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+            />
+            <NavItem 
+              icon={<Folder size={18} />} 
+              label="工程合約" 
+              active={activeTab === 'contracts' && !activeContract} 
+              onClick={() => { setActiveTab('contracts'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+            />
+            {(activeTab === 'contracts' || activeContract) && (
               <div className="mt-1 space-y-1 pl-4 border-l border-slate-800 ml-5">
                 {uniqueContracts.map(contract => (
                   <button
                     key={contract}
-                    onClick={() => { setActiveContract(contract); setActiveTab('staff'); }}
+                    onClick={() => { setActiveContract(contract); setActiveTab('contracts'); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
                     className={cn(
                       "w-full text-left px-3 py-2 rounded-lg text-sm transition-all truncate",
                       activeContract === contract ? "bg-blue-600/20 text-blue-400 font-medium" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
@@ -510,45 +395,53 @@ export default function App() {
                     {contract}
                   </button>
                 ))}
-                {uniqueContracts.length === 0 && (
-                  <div className="px-3 py-2 text-xs text-slate-500">尚無合約資料</div>
-                )}
               </div>
             )}
           </div>
         </nav>
 
-        <div className="p-4 border-t border-slate-800/50">
-          <div className={cn("flex items-center gap-3 p-2 rounded-lg", isSidebarOpen ? "bg-slate-800/50" : "justify-center")}>
+        <div className="p-3 border-t border-slate-800/50 space-y-2">
+          {profile?.role === 'admin' && (
+            <NavItem 
+              icon={<Settings size={18} />} 
+              label="權限與設定" 
+              active={activeTab === 'settings'} 
+              onClick={() => { setActiveTab('settings'); setActiveContract(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
+            />
+          )}
+          <div className="flex items-center gap-3 p-2.5 rounded-lg bg-slate-800/50 mt-2">
             <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-inner">
               {user.displayName?.[0] || 'U'}
             </div>
-            {isSidebarOpen && (
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-slate-200 truncate">{user.displayName}</p>
-                <p className="text-[10px] text-slate-500 truncate uppercase tracking-wider">{profile?.role}</p>
-              </div>
-            )}
-            {isSidebarOpen && (
-              <button onClick={handleLogout} className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-md transition-colors">
-                <LogOut size={16} />
-              </button>
-            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-slate-200 truncate">{user.displayName}</p>
+              <p className="text-[10px] text-slate-500 truncate uppercase tracking-wider">{profile?.role}</p>
+            </div>
+            <button onClick={handleLogout} className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-md transition-colors">
+              <LogOut size={16} />
+            </button>
           </div>
         </div>
-      </motion.aside>
+      </aside>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 z-10">
-          <h2 className="font-semibold text-slate-800 tracking-tight flex items-center gap-3">
-            {activeContract && <span className="px-2.5 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-md text-xs font-mono">{activeContract}</span>}
-            {activeTab === 'dashboard' && '系統概況'}
-            {activeTab === 'staff' && '人員管理'}
-            {activeTab === 'certs' && '證照清單'}
-            {activeTab === 'certTypes' && '證照類型管理'}
-            {activeTab === 'settings' && '權限與設定'}
-          </h2>
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-8 z-10">
+          <div className="flex items-center gap-3">
+            <button className="md:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-md" onClick={() => setIsSidebarOpen(true)}>
+              <Menu size={20} />
+            </button>
+            <h2 className="font-semibold text-slate-800 tracking-tight flex items-center gap-3">
+              {activeContract && <span className="px-2.5 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-md text-xs font-mono hidden md:inline-block">{activeContract}</span>}
+              {activeTab === 'dashboard' && '系統概況'}
+              {activeTab === 'staff' && '人員管理'}
+              {activeTab === 'machines' && '機械管理'}
+              {activeTab === 'certs' && '證書清單'}
+              {activeTab === 'certTypes' && '證書類型管理'}
+              {activeTab === 'settings' && '權限與設定'}
+              {activeTab === 'contracts' && '工程合約'}
+            </h2>
+          </div>
           <div className="flex items-center gap-4">
             <button 
               onClick={() => setShowNotifications(true)}
@@ -570,8 +463,8 @@ export default function App() {
               {/* Stats Grid */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <StatCard label="總人員" value={staff.length} icon={<Users className="text-blue-500" />} />
-                <StatCard label="總證照" value={certs.length} icon={<FileBadge className="text-purple-500" />} />
-                <StatCard label="即將到期" value={expiringSoon.length} icon={<AlertTriangle className="text-brand-accent" />} trend="30天內" />
+                <StatCard label="總證書" value={certs.length} icon={<FileBadge className="text-purple-500" />} />
+                <StatCard label="即將到期" value={expiringSoon.length} icon={<AlertTriangle className="text-[#ffbc00]" />} trend="30天內" />
                 <StatCard label="已過期" value={expired.length} icon={<X className="text-red-500" />} variant="danger" />
               </div>
 
@@ -593,12 +486,12 @@ export default function App() {
                     </div>
                     <div className="flex-1 overflow-y-auto">
                       {expiringSoon.length === 0 ? (
-                        <div className="p-12 text-center text-black/30 italic text-sm">目前無即將到期證照</div>
+                        <div className="p-12 text-center text-black/30 italic text-sm">目前無即將到期證書</div>
                       ) : (
                         expiringSoon.map(cert => (
                           <div key={cert.id} className="data-row p-4 grid-cols-[1fr_auto]">
                             <div>
-                              <p className="font-bold text-sm">{cert.staffName}</p>
+                              <p className="font-bold text-sm">{cert.ownerName}</p>
                               <p className="text-xs opacity-50">{cert.type} - {cert.certNumber}</p>
                             </div>
                             <div className="text-right">
@@ -617,7 +510,7 @@ export default function App() {
                   <Card className="p-6 bg-white text-slate-800 shadow-xl shadow-slate-200/50">
                     <h3 className="text-sm font-semibold mb-4 text-[#1d293d]">快速操作</h3>
                     <div className="grid grid-cols-3 gap-3">
-                      {(profile?.role === 'admin' || allowStaffEdit) && (
+                      {profile?.role === 'admin' && (
                         <>
                           <QuickActionBtn 
                             icon={<Plus size={18} />} 
@@ -627,7 +520,7 @@ export default function App() {
                           />
                           <QuickActionBtn 
                             icon={<FileBadge size={18} />} 
-                            label="上傳證照" 
+                            label="上傳證書" 
                             onClick={() => { setActiveTab('certs'); setShowAddCert(true); }} 
                             className="bg-slate-100 text-slate-800 hover:bg-slate-200"
                           />
@@ -636,7 +529,7 @@ export default function App() {
                       <QuickActionBtn 
                         icon={<Download size={18} />} 
                         label="匯出試算表" 
-                        onClick={exportToCSV} 
+                        onClick={exportCerts} 
                         className="bg-slate-100 text-slate-800 hover:bg-slate-200"
                       />
                     </div>
@@ -663,9 +556,6 @@ export default function App() {
                               const val = parseInt(e.target.value);
                               if (!isNaN(val) && val > 0) {
                                 setNotificationDays(val);
-                                if (profile?.role === 'admin') {
-                                  await setDoc(doc(db, 'systemSettings', 'global'), { notificationDays: val }, { merge: true });
-                                }
                               }
                             }}
                             disabled={profile?.role !== 'admin'}
@@ -691,11 +581,16 @@ export default function App() {
                     className="w-full pl-10 pr-4 py-2 bg-white border border-black/10 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-black/20"
                   />
                 </div>
-                {(profile?.role === 'admin' || allowStaffEdit) && (
-                  <Button onClick={() => setShowAddStaff(true)} className="flex items-center gap-2">
-                    <Plus size={18} /> 新增人員
+                <div className="flex gap-2">
+                  <Button onClick={exportStaff} variant="outline" className="flex items-center gap-2">
+                    <Download size={18} /> 匯出
                   </Button>
-                )}
+                  {profile?.role === 'admin' && (
+                    <Button onClick={() => setShowAddStaff(true)} className="flex items-center gap-2">
+                      <Plus size={18} /> 新增人員
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <Card>
@@ -703,7 +598,7 @@ export default function App() {
                   <button onClick={() => handleStaffSort('name')} className="col-header flex items-center gap-1 hover:text-slate-700">姓名 / 工號 {staffSort.key === 'name' && (staffSort.dir === 'asc' ? '▲' : '▼')}</button>
                   <button onClick={() => handleStaffSort('department')} className="col-header flex items-center gap-1 hover:text-slate-700">部門 {staffSort.key === 'department' && (staffSort.dir === 'asc' ? '▲' : '▼')}</button>
                   <button onClick={() => handleStaffSort('contractNumber')} className="col-header flex items-center gap-1 hover:text-slate-700">合約編號 {staffSort.key === 'contractNumber' && (staffSort.dir === 'asc' ? '▲' : '▼')}</button>
-                  <span className="col-header">證照數量</span>
+                  <span className="col-header">證書數量</span>
                   <span className="col-header">操作</span>
                 </div>
                 {sortedStaff.length === 0 ? (
@@ -717,8 +612,8 @@ export default function App() {
                       </div>
                       <p className="text-sm text-slate-700">{s.department}</p>
                       <p className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded w-fit">{s.contractNumber || '-'}</p>
-                      <p className="data-value">{certs.filter(c => c.staffId === s.id).length}</p>
-                      {(profile?.role === 'admin' || allowStaffEdit) && (
+                      <p className="data-value">{certs.filter(c => c.ownerId === s.id && c.ownerType === 'staff').length}</p>
+                      {profile?.role === 'admin' && (
                         <div className="flex gap-1">
                           <button onClick={() => setConfirmDelete({type: 'staff', id: s.id})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
                             <Trash2 size={16} />
@@ -732,6 +627,182 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'machines' && (
+            <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                <div className="relative w-72">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={16} />
+                  <input 
+                    type="text" 
+                    placeholder="搜尋機械名稱或編號..." 
+                    className="w-full pl-10 pr-4 py-2 bg-white border border-black/10 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-black/20"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={exportMachines} variant="outline" className="flex items-center gap-2">
+                    <Download size={18} /> 匯出
+                  </Button>
+                  {profile?.role === 'admin' && (
+                    <Button onClick={() => setShowAddMachine(true)} className="flex items-center gap-2">
+                      <Plus size={18} /> 新增機械
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <Card>
+                <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_100px] p-4 border-b border-slate-200 bg-slate-50/50">
+                  <span className="col-header">機械名稱 / 編號</span>
+                  <span className="col-header">部門</span>
+                  <span className="col-header">合約編號</span>
+                  <span className="col-header">證書數量</span>
+                  <span className="col-header">操作</span>
+                </div>
+                {machines.length === 0 ? (
+                  <div className="p-12 text-center text-slate-400 italic text-sm">尚無機械資料</div>
+                ) : (
+                  machines.map(m => (
+                    <div key={m.id} className="data-row grid-cols-[1.5fr_1fr_1fr_1fr_100px] p-4">
+                      <div>
+                        <p className="font-semibold text-slate-900">{m.name}</p>
+                        <p className="text-xs font-mono text-slate-500">{m.machineNumber}</p>
+                      </div>
+                      <p className="text-sm text-slate-700">{m.department}</p>
+                      <p className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded w-fit">{m.contractNumber || '-'}</p>
+                      <p className="data-value">{certs.filter(c => c.ownerId === m.id && c.ownerType === 'machine').length}</p>
+                      {profile?.role === 'admin' && (
+                        <div className="flex gap-1">
+                          <button onClick={() => setConfirmDelete({type: 'machine', id: m.id})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </Card>
+            </div>
+          )}
+
+          {activeTab === 'contracts' && (
+            <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                <p className="text-slate-500 text-sm">依工程合約檢視人員與機械證書狀態。</p>
+                <div className="flex gap-2">
+                  <Button onClick={exportContracts} variant="outline" className="flex items-center gap-2">
+                    <Download size={18} /> 匯出
+                  </Button>
+                </div>
+              </div>
+
+              {(activeContract ? [activeContract] : uniqueContracts).length === 0 ? (
+                <Card className="p-12 text-center text-slate-400 italic text-sm">尚無合約資料</Card>
+              ) : (
+                (activeContract ? [activeContract] : uniqueContracts).map(contract => {
+                  const contractCerts = certs.filter(c => c.contractNumber === contract);
+                  const staffCerts = contractCerts.filter(c => c.ownerType === 'staff');
+                  const machineCerts = contractCerts.filter(c => c.ownerType === 'machine');
+
+                  return (
+                    <Card key={contract} className="mb-8">
+                      <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+                        <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                          <Folder className="text-blue-500" size={20} />
+                          {contract}
+                        </h3>
+                        <Badge variant="neutral">共 {contractCerts.length} 張證書</Badge>
+                      </div>
+                      
+                      <div className="p-6 space-y-8">
+                        {/* Staff Certs */}
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                            <Users size={16} className="text-slate-400" /> 人員證書 ({staffCerts.length})
+                          </h4>
+                          {staffCerts.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic">無人員證書</p>
+                          ) : (
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                              <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_100px] p-3 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                <span>持有人</span>
+                                <span>證書類型 / 編號</span>
+                                <span>到期日</span>
+                                <span>狀態</span>
+                                <span>操作</span>
+                              </div>
+                              {staffCerts.map(c => {
+                                const isExpired = isBefore(parseISO(c.expiryDate), new Date());
+                                const isExpiringSoon = differenceInDays(parseISO(c.expiryDate), new Date()) > 0 && differenceInDays(parseISO(c.expiryDate), new Date()) <= 30;
+                                return (
+                                  <div key={c.id} className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_100px] p-3 border-b last:border-0 border-slate-100 items-center text-sm hover:bg-slate-50/50">
+                                    <span className="font-medium text-slate-900">{c.ownerName}</span>
+                                    <div>
+                                      <p className="text-slate-800">{c.type}</p>
+                                      <p className="text-[10px] font-mono text-slate-500">{c.certNumber}</p>
+                                    </div>
+                                    <span className={cn(isExpired ? "text-red-600 font-semibold" : isExpiringSoon ? "text-amber-600 font-semibold" : "text-slate-600")}>{c.expiryDate}</span>
+                                    <div>
+                                      {isExpired ? <Badge variant="danger">已過期</Badge> : isExpiringSoon ? <Badge variant="warning">即將到期</Badge> : <Badge variant="success">有效</Badge>}
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <button onClick={() => setDetailCert(c)} className="p-1.5 hover:bg-blue-100 hover:text-blue-600 rounded-md transition-colors text-slate-500"><FileBadge size={14} /></button>
+                                      <CertQRModal cert={c} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Machine Certs */}
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                            <Building2 size={16} className="text-slate-400" /> 機械證書 ({machineCerts.length})
+                          </h4>
+                          {machineCerts.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic">無機械證書</p>
+                          ) : (
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                              <div className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_100px] p-3 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                <span>機械名稱</span>
+                                <span>證書類型 / 編號</span>
+                                <span>到期日</span>
+                                <span>狀態</span>
+                                <span>操作</span>
+                              </div>
+                              {machineCerts.map(c => {
+                                const isExpired = isBefore(parseISO(c.expiryDate), new Date());
+                                const isExpiringSoon = differenceInDays(parseISO(c.expiryDate), new Date()) > 0 && differenceInDays(parseISO(c.expiryDate), new Date()) <= 30;
+                                return (
+                                  <div key={c.id} className="grid grid-cols-[1.5fr_1.5fr_1fr_1fr_100px] p-3 border-b last:border-0 border-slate-100 items-center text-sm hover:bg-slate-50/50">
+                                    <span className="font-medium text-slate-900">{c.ownerName}</span>
+                                    <div>
+                                      <p className="text-slate-800">{c.type}</p>
+                                      <p className="text-[10px] font-mono text-slate-500">{c.certNumber}</p>
+                                    </div>
+                                    <span className={cn(isExpired ? "text-red-600 font-semibold" : isExpiringSoon ? "text-amber-600 font-semibold" : "text-slate-600")}>{c.expiryDate}</span>
+                                    <div>
+                                      {isExpired ? <Badge variant="danger">已過期</Badge> : isExpiringSoon ? <Badge variant="warning">即將到期</Badge> : <Badge variant="success">有效</Badge>}
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <button onClick={() => setDetailCert(c)} className="p-1.5 hover:bg-blue-100 hover:text-blue-600 rounded-md transition-colors text-slate-500"><FileBadge size={14} /></button>
+                                      <CertQRModal cert={c} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })
+              )}
+            </div>
+          )}
+
           {activeTab === 'certs' && (
             <div className="space-y-6">
               <div className="flex justify-between items-center">
@@ -740,7 +811,7 @@ export default function App() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" size={16} />
                     <input 
                       type="text" 
-                      placeholder="搜尋證照名稱或編號..." 
+                      placeholder="搜尋證書名稱或編號..." 
                       className="w-full pl-10 pr-4 py-2 bg-white border border-black/10 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-black/20"
                     />
                   </div>
@@ -751,35 +822,41 @@ export default function App() {
                     <option>已過期</option>
                   </select>
                 </div>
-                {(profile?.role === 'admin' || allowStaffEdit) && (
-                  <Button onClick={() => setShowAddCert(true)} className="flex items-center gap-2">
-                    <Plus size={18} /> 上傳證照
+                <div className="flex gap-2">
+                  <Button onClick={exportCerts} variant="outline" className="flex items-center gap-2">
+                    <Download size={18} /> 匯出
                   </Button>
-                )}
+                  {profile?.role === 'admin' && (
+                    <Button onClick={() => setShowAddCert(true)} className="flex items-center gap-2">
+                      <Plus size={18} /> 上傳證書
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <Card>
                 <div className="grid grid-cols-[1.5fr_1fr_1.5fr_1fr_1fr_120px] p-4 border-b border-slate-200 bg-slate-50/50">
-                  <button onClick={() => handleCertSort('staffName')} className="col-header flex items-center gap-1 hover:text-slate-700">持有人 {certSort.key === 'staffName' && (certSort.dir === 'asc' ? '▲' : '▼')}</button>
+                  <button onClick={() => handleCertSort('ownerName')} className="col-header flex items-center gap-1 hover:text-slate-700">持有人/機械 {certSort.key === 'ownerName' && (certSort.dir === 'asc' ? '▲' : '▼')}</button>
                   <button onClick={() => handleCertSort('contractNumber')} className="col-header flex items-center gap-1 hover:text-slate-700">合約編號 {certSort.key === 'contractNumber' && (certSort.dir === 'asc' ? '▲' : '▼')}</button>
-                  <button onClick={() => handleCertSort('type')} className="col-header flex items-center gap-1 hover:text-slate-700">證照類型 / 編號 {certSort.key === 'type' && (certSort.dir === 'asc' ? '▲' : '▼')}</button>
+                  <button onClick={() => handleCertSort('type')} className="col-header flex items-center gap-1 hover:text-slate-700">證書類型 / 編號 {certSort.key === 'type' && (certSort.dir === 'asc' ? '▲' : '▼')}</button>
                   <button onClick={() => handleCertSort('expiryDate')} className="col-header flex items-center gap-1 hover:text-slate-700">到期日 {certSort.key === 'expiryDate' && (certSort.dir === 'asc' ? '▲' : '▼')}</button>
                   <span className="col-header">狀態</span>
                   <span className="col-header">操作</span>
                 </div>
                 {sortedCerts.length === 0 ? (
-                  <div className="p-12 text-center text-slate-400 italic text-sm">尚無證照資料</div>
+                  <div className="p-12 text-center text-slate-400 italic text-sm">尚無證書資料</div>
                 ) : (
                   sortedCerts.map(c => {
                     const isExpired = isBefore(parseISO(c.expiryDate), new Date());
                     const daysToExpiry = differenceInDays(parseISO(c.expiryDate), new Date());
                     const isExpiringSoon = daysToExpiry > 0 && daysToExpiry <= 30;
-                    const staffInfo = staff.find(s => s.id === c.staffId);
-                    
                     return (
                       <div key={c.id} className="data-row grid-cols-[1.5fr_1fr_1.5fr_1fr_1fr_120px] p-4">
-                        <p className="font-semibold text-sm text-slate-900">{c.staffName}</p>
-                        <p className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded w-fit">{staffInfo?.contractNumber || '-'}</p>
+                        <div>
+                          <p className="font-semibold text-sm text-slate-900">{c.ownerName}</p>
+                          <p className="text-[10px] font-mono text-slate-500">{c.ownerType === 'staff' ? '人員' : '機械'}</p>
+                        </div>
+                        <p className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded w-fit">{c.contractNumber || '-'}</p>
                         <div>
                           <p className="text-sm font-medium text-slate-800">{c.type}</p>
                           <p className="text-[10px] font-mono text-slate-500">{c.certNumber}</p>
@@ -793,13 +870,16 @@ export default function App() {
                            <Badge variant="success">有效</Badge>}
                         </div>
                         <div className="flex gap-1">
+                          <button onClick={() => setDetailCert(c)} className="p-2 hover:bg-blue-100 hover:text-blue-600 rounded-md transition-colors text-slate-500" title="詳細資料">
+                            <FileBadge size={16} />
+                          </button>
                           <CertQRModal cert={c} />
                           {c.documentUrl && (
                             <a href={c.documentUrl} target="_blank" rel="noreferrer" className="p-2 hover:bg-slate-200 rounded-md transition-colors text-slate-500" title="查看檔案">
                               <ExternalLink size={16} />
                             </a>
                           )}
-                          {(profile?.role === 'admin' || allowStaffEdit) && (
+                          {profile?.role === 'admin' && (
                             <button onClick={() => setConfirmDelete({type: 'cert', id: c.id})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
                               <Trash2 size={16} />
                             </button>
@@ -815,30 +895,66 @@ export default function App() {
           {activeTab === 'certTypes' && profile?.role === 'admin' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex items-center justify-between">
-                <p className="text-slate-500 text-sm">管理系統中可用的證照類型，這些類型將出現在新增證照的下拉選單中。</p>
-                <Button onClick={() => setShowAddCertType(true)} className="flex items-center gap-2">
-                  <Plus size={18} /> 新增證照類型
-                </Button>
+                <p className="text-slate-500 text-sm">管理系統中可用的證書類型，這些類型將出現在新增證書的下拉選單中。</p>
+                <div className="flex gap-2">
+                  <Button onClick={exportCertTypes} variant="outline" className="flex items-center gap-2">
+                    <Download size={18} /> 匯出
+                  </Button>
+                  <Button onClick={() => setShowAddCertType(true)} className="flex items-center gap-2">
+                    <Plus size={18} /> 新增證書類型
+                  </Button>
+                </div>
               </div>
 
-              <Card>
-                <div className="grid grid-cols-[1fr_auto] p-4 border-b border-slate-200 bg-slate-50/50">
-                  <span className="col-header">證照類型名稱</span>
-                  <span className="col-header">操作</span>
-                </div>
-                {certTypes.length === 0 ? (
-                  <div className="p-12 text-center text-slate-400 italic text-sm">尚無證照類型</div>
-                ) : (
-                  certTypes.map(ct => (
-                    <div key={ct.id} className="data-row grid-cols-[1fr_auto] p-4">
-                      <p className="font-semibold text-slate-900">{ct.name}</p>
-                      <button onClick={() => setConfirmDelete({type: 'certType', id: ct.id, name: ct.name})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </Card>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {/* Staff Cert Types */}
+                <Card>
+                  <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+                    <Users size={18} className="text-blue-500" />
+                    <h3 className="font-bold text-slate-800">人員證書</h3>
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto] p-3 border-b border-slate-200 bg-slate-50/50 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    <span>證書類型名稱</span>
+                    <span>操作</span>
+                  </div>
+                  {certTypes.filter(ct => ct.category === 'staff').length === 0 ? (
+                    <div className="p-12 text-center text-slate-400 italic text-sm">尚無人員證書類型</div>
+                  ) : (
+                    certTypes.filter(ct => ct.category === 'staff').map(ct => (
+                      <div key={ct.id} className="data-row grid-cols-[1fr_auto] p-3">
+                        <p className="font-semibold text-slate-900">{ct.name}</p>
+                        <button onClick={() => setConfirmDelete({type: 'certType', id: ct.id, name: ct.name})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </Card>
+
+                {/* Machine Cert Types */}
+                <Card>
+                  <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+                    <Building2 size={18} className="text-blue-500" />
+                    <h3 className="font-bold text-slate-800">機械證書</h3>
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto] p-3 border-b border-slate-200 bg-slate-50/50 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    <span>證書類型名稱</span>
+                    <span>操作</span>
+                  </div>
+                  {certTypes.filter(ct => ct.category === 'machine').length === 0 ? (
+                    <div className="p-12 text-center text-slate-400 italic text-sm">尚無機械證書類型</div>
+                  ) : (
+                    certTypes.filter(ct => ct.category === 'machine').map(ct => (
+                      <div key={ct.id} className="data-row grid-cols-[1fr_auto] p-3">
+                        <p className="font-semibold text-slate-900">{ct.name}</p>
+                        <button onClick={() => setConfirmDelete({type: 'certType', id: ct.id, name: ct.name})} className="p-2 hover:bg-red-100 hover:text-red-600 rounded-md transition-colors text-slate-500" title="刪除">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </Card>
+              </div>
             </motion.div>
           )}
 
@@ -847,23 +963,6 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <p className="text-slate-500 text-sm">管理系統使用者權限。您可以預先加入使用者的 Email 並設定權限。</p>
                 <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={allowStaffEdit} 
-                      onChange={async (e) => {
-                        const checked = e.target.checked;
-                        setAllowStaffEdit(checked);
-                        try {
-                          await setDoc(doc(db, 'systemSettings', 'global'), { allowStaffEdit: checked }, { merge: true });
-                        } catch (err) {
-                          console.error(err);
-                        }
-                      }}
-                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                    />
-                    <span className="text-sm font-medium text-slate-700">允許一般人員編輯資料</span>
-                  </label>
                   <Button onClick={() => setShowAddUser(true)} className="flex items-center gap-2">
                     <Plus size={18} /> 預先加入使用者
                   </Button>
@@ -924,19 +1023,24 @@ export default function App() {
       <AnimatePresence>
         {showAddStaff && (
           <Modal title="新增人員資料" onClose={() => setShowAddStaff(false)}>
-            <AddStaffForm onComplete={() => setShowAddStaff(false)} />
+            <AddStaffForm onComplete={() => setShowAddStaff(false)} onAdd={(newStaff) => setStaff(prev => [...prev, newStaff])} />
+          </Modal>
+        )}
+        {showAddMachine && (
+          <Modal title="新增機械資料" onClose={() => setShowAddMachine(false)}>
+            <AddMachineForm onComplete={() => setShowAddMachine(false)} onAdd={(newMachine) => setMachines(prev => [...prev, newMachine])} />
           </Modal>
         )}
         {showAddCert && (
-          <Modal title="上傳證照資料" onClose={() => setShowAddCert(false)}>
-            <AddCertForm staffList={staff} certTypes={certTypes} onComplete={() => setShowAddCert(false)} />
+          <Modal title="上傳證書資料" onClose={() => setShowAddCert(false)}>
+            <AddCertForm staffList={staff} machineList={machines} certTypes={certTypes} onComplete={() => setShowAddCert(false)} onAdd={(newCert) => setCerts(prev => [...prev, newCert])} />
           </Modal>
         )}
         {confirmDelete && (
           <Modal title="確認刪除" onClose={() => setConfirmDelete(null)}>
             <div className="space-y-6">
               <p className="text-slate-600 text-sm">
-                您確定要刪除這筆{confirmDelete.type === 'staff' ? '人員' : confirmDelete.type === 'cert' ? '證照' : '證照類型'}{confirmDelete.name ? `「${confirmDelete.name}」` : ''}資料嗎？此操作無法復原。
+                您確定要刪除這筆{confirmDelete.type === 'staff' ? '人員' : confirmDelete.type === 'cert' ? '證書' : '證書類型'}{confirmDelete.name ? `「${confirmDelete.name}」` : ''}資料嗎？此操作無法復原。
               </p>
               <div className="flex gap-3 justify-end">
                 <Button variant="ghost" onClick={() => setConfirmDelete(null)}>取消</Button>
@@ -972,17 +1076,35 @@ export default function App() {
           </Modal>
         )}
         {showAddCertType && (
-          <Modal title="新增證照類型" onClose={() => setShowAddCertType(false)}>
+          <Modal title="新增證書類型" onClose={() => setShowAddCertType(false)}>
             <form onSubmit={handleAddCertType} className="space-y-6">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證照類型名稱</label>
-                <input 
-                  required 
-                  autoFocus
-                  value={newCertTypeName} 
-                  onChange={e => setNewCertTypeName(e.target.value)} 
-                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" 
-                />
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證書類型名稱</label>
+                  <input 
+                    required 
+                    autoFocus
+                    value={newCertTypeName} 
+                    onChange={e => setNewCertTypeName(e.target.value)} 
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">分類</label>
+                  <select 
+                    required
+                    onChange={e => {
+                      // We need to update the handleAddCertType to use this value, 
+                      // or just use a state for category. Let's add a state or just use a ref.
+                      // Actually, let's just use a select and update the form submission.
+                    }}
+                    id="certTypeCategory"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all"
+                  >
+                    <option value="staff">人員證書</option>
+                    <option value="machine">機械證書</option>
+                  </select>
+                </div>
               </div>
               <div className="flex gap-3 justify-end">
                 <Button type="button" variant="ghost" onClick={() => setShowAddCertType(false)}>取消</Button>
@@ -1039,12 +1161,12 @@ export default function App() {
           <Modal title="即將到期通知" onClose={() => setShowNotifications(false)}>
             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
               {expiringSoon.length === 0 ? (
-                <div className="p-8 text-center text-slate-400 italic text-sm">目前無即將到期證照</div>
+                <div className="p-8 text-center text-slate-400 italic text-sm">目前無即將到期證書</div>
               ) : (
                 expiringSoon.map(cert => (
                   <div key={cert.id} className="p-4 bg-slate-50 border border-slate-200 rounded-lg flex justify-between items-center">
                     <div>
-                      <p className="font-bold text-sm text-slate-800">{cert.staffName}</p>
+                      <p className="font-bold text-sm text-slate-800">{cert.ownerName}</p>
                       <p className="text-xs text-slate-500">{cert.type} - {cert.certNumber}</p>
                     </div>
                     <div className="text-right">
@@ -1062,6 +1184,43 @@ export default function App() {
             </div>
           </Modal>
         )}
+        {detailCert && (
+          <Modal title="證書詳細資料與查驗紀錄" onClose={() => setDetailCert(null)}>
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <InfoBlock label={detailCert.ownerType === 'staff' ? '持有人' : '機械'} value={detailCert.ownerName} />
+                <InfoBlock label="證書類型" value={detailCert.type} />
+                <InfoBlock label="證書編號" value={detailCert.certNumber} />
+                <InfoBlock label="到期日期" value={detailCert.expiryDate} highlight={isBefore(parseISO(detailCert.expiryDate), new Date())} />
+              </div>
+              
+              <div>
+                <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                  <Clock size={16} className="text-slate-400" /> 查驗紀錄 (Logs)
+                </h4>
+                <div className="max-h-48 overflow-y-auto space-y-2 pr-2">
+                  {(() => {
+                    const logs = JSON.parse(localStorage.getItem(`cert_logs_${detailCert.id}`) || '[]');
+                    if (logs.length === 0) return <p className="text-xs text-slate-400 italic">尚無查驗紀錄</p>;
+                    return logs.map((log: any) => (
+                      <div key={log.id} className="flex justify-between items-center p-2.5 bg-white border border-slate-200 rounded-lg text-xs">
+                        <div className="flex items-center gap-3">
+                          <ShieldCheck size={14} className="text-emerald-500" />
+                          <span className="font-mono text-slate-600">{format(parseISO(log.timestamp), 'yyyy-MM-dd HH:mm:ss')}</span>
+                        </div>
+                        <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded">{log.user}</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <Button onClick={() => setDetailCert(null)}>關閉</Button>
+              </div>
+            </div>
+          </Modal>
+        )}
       </AnimatePresence>
     </div>
   );
@@ -1069,18 +1228,17 @@ export default function App() {
 
 // --- Sub-components ---
 
-function NavItem({ icon, label, active, collapsed, onClick }: { icon: React.ReactNode, label: string, active: boolean, collapsed: boolean, onClick: () => void }) {
+function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
         "w-full flex items-center gap-3 p-2.5 rounded-lg transition-all text-sm font-medium",
-        active ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200",
-        collapsed && "justify-center"
+        active ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
       )}
     >
       {icon}
-      {!collapsed && <span>{label}</span>}
+      <span>{label}</span>
     </button>
   );
 }
@@ -1176,8 +1334,8 @@ function CalendarWidget({ certs }: { certs: Certificate[] }) {
               </span>
               <div className="flex-1 overflow-y-auto space-y-1 scrollbar-hide">
                 {dayCerts.map(c => (
-                  <div key={c.id} className="text-[9px] leading-tight bg-amber-100 text-amber-800 px-1.5 py-1 rounded truncate font-medium border border-amber-200/50" title={`${c.staffName} - ${c.type}`}>
-                    {c.staffName}
+                  <div key={c.id} className="text-[9px] leading-tight bg-amber-100 text-amber-800 px-1.5 py-1 rounded truncate font-medium border border-amber-200/50" title={`${c.ownerName} - ${c.type}`}>
+                    {c.ownerName}
                   </div>
                 ))}
               </div>
@@ -1189,24 +1347,22 @@ function CalendarWidget({ certs }: { certs: Certificate[] }) {
   );
 }
 
-function AddStaffForm({ onComplete }: { onComplete: () => void }) {
+function AddStaffForm({ onComplete, onAdd }: { onComplete: () => void, onAdd: (staff: Staff) => void }) {
   const [formData, setFormData] = useState({ name: '', staffNumber: '', department: '', contractNumber: '' });
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    try {
-      await addDoc(collection(db, 'staff'), {
+    setTimeout(() => {
+      onAdd({
+        id: Date.now().toString(),
         ...formData,
-        createdAt: serverTimestamp()
+        createdAt: new Date().toISOString()
       });
       onComplete();
-    } catch (err) {
-      console.error(err);
-    } finally {
       setSubmitting(false);
-    }
+    }, 300);
   };
 
   return (
@@ -1237,8 +1393,54 @@ function AddStaffForm({ onComplete }: { onComplete: () => void }) {
   );
 }
 
-function AddCertForm({ staffList, certTypes, onComplete }: { staffList: Staff[], certTypes: CertType[], onComplete: () => void }) {
-  const [formData, setFormData] = useState({ staffId: '', type: '', certNumber: '', expiryDate: '', documentUrl: '' });
+function AddMachineForm({ onComplete, onAdd }: { onComplete: () => void, onAdd: (machine: Machine) => void }) {
+  const [formData, setFormData] = useState({ name: '', machineNumber: '', department: '', contractNumber: '' });
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setTimeout(() => {
+      onAdd({
+        id: Date.now().toString(),
+        ...formData,
+        createdAt: new Date().toISOString()
+      });
+      onComplete();
+      setSubmitting(false);
+    }, 300);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="space-y-4">
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">機械名稱</label>
+          <input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">機械編號</label>
+          <input required value={formData.machineNumber} onChange={e => setFormData({...formData, machineNumber: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">部門</label>
+          <input required value={formData.department} onChange={e => setFormData({...formData, department: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">合約編號 - 選填</label>
+          <input value={formData.contractNumber} onChange={e => setFormData({...formData, contractNumber: e.target.value})} placeholder="例如: TC-2026-001" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
+        </div>
+      </div>
+      <div className="flex gap-3 justify-end">
+        <Button type="button" variant="ghost" onClick={onComplete}>取消</Button>
+        <Button type="submit" disabled={submitting}>{submitting ? '儲存中...' : '確認新增'}</Button>
+      </div>
+    </form>
+  );
+}
+
+function AddCertForm({ staffList, machineList, certTypes, onComplete, onAdd }: { staffList: Staff[], machineList: Machine[], certTypes: CertType[], onComplete: () => void, onAdd: (cert: Certificate) => void }) {
+  const [formData, setFormData] = useState({ ownerType: 'staff' as 'staff' | 'machine', ownerId: '', type: '', certNumber: '', expiryDate: '', documentUrl: '' });
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -1247,17 +1449,30 @@ function AddCertForm({ staffList, certTypes, onComplete }: { staffList: Staff[],
     setSubmitting(true);
     setErrorMsg('');
     try {
-      const selectedStaff = staffList.find(s => s.id === formData.staffId);
-      await addDoc(collection(db, 'certificates'), {
-        staffId: formData.staffId,
+      let ownerName = 'Unknown';
+      let contractNumber = '';
+      if (formData.ownerType === 'staff') {
+        const selectedStaff = staffList.find(s => s.id === formData.ownerId);
+        ownerName = selectedStaff?.name || 'Unknown';
+        contractNumber = selectedStaff?.contractNumber || '';
+      } else {
+        const selectedMachine = machineList.find(m => m.id === formData.ownerId);
+        ownerName = selectedMachine?.name || 'Unknown';
+        contractNumber = selectedMachine?.contractNumber || '';
+      }
+
+      onAdd({
+        id: Date.now().toString(),
+        ownerType: formData.ownerType,
+        ownerId: formData.ownerId,
         type: formData.type,
         certNumber: formData.certNumber,
         expiryDate: formData.expiryDate,
         documentUrl: formData.documentUrl,
-        staffName: selectedStaff?.name || 'Unknown',
-        contractNumber: selectedStaff?.contractNumber || '',
+        ownerName: ownerName,
+        contractNumber: contractNumber,
         status: 'valid',
-        createdAt: serverTimestamp()
+        createdAt: new Date().toISOString()
       });
       onComplete();
     } catch (err: any) {
@@ -1267,6 +1482,8 @@ function AddCertForm({ staffList, certTypes, onComplete }: { staffList: Staff[],
       setSubmitting(false);
     }
   };
+
+  const filteredCertTypes = certTypes.filter(ct => ct.category === formData.ownerType);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -1278,24 +1495,35 @@ function AddCertForm({ staffList, certTypes, onComplete }: { staffList: Staff[],
       )}
       <div className="space-y-4">
         <div className="space-y-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">持有人</label>
-          <select required value={formData.staffId} onChange={e => setFormData({...formData, staffId: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all">
-            <option value="">選擇人員...</option>
-            {staffList.map(s => <option key={s.id} value={s.id}>{s.name} ({s.staffNumber})</option>)}
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證書分類</label>
+          <select required value={formData.ownerType} onChange={e => setFormData({...formData, ownerType: e.target.value as 'staff' | 'machine', ownerId: '', type: ''})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all">
+            <option value="staff">人員證書</option>
+            <option value="machine">機械證書</option>
           </select>
         </div>
         <div className="space-y-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證照類型</label>
-          <select required value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all">
-            <option value="">選擇證照類型...</option>
-            {certTypes.map(ct => <option key={ct.id} value={ct.name}>{ct.name}</option>)}
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">{formData.ownerType === 'staff' ? '持有人' : '機械'}</label>
+          <select required value={formData.ownerId} onChange={e => setFormData({...formData, ownerId: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all">
+            <option value="">選擇{formData.ownerType === 'staff' ? '人員' : '機械'}...</option>
+            {formData.ownerType === 'staff' ? (
+              staffList.map(s => <option key={s.id} value={s.id}>{s.name} ({s.staffNumber})</option>)
+            ) : (
+              machineList.map(m => <option key={m.id} value={m.id}>{m.name} ({m.machineNumber})</option>)
+            )}
           </select>
-          {certTypes.length === 0 && (
-            <p className="text-[10px] text-amber-600 mt-1">請先請管理員在「證照類型管理」新增類型。</p>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證書類型</label>
+          <select required value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all">
+            <option value="">選擇證書類型...</option>
+            {filteredCertTypes.map(ct => <option key={ct.id} value={ct.name}>{ct.name}</option>)}
+          </select>
+          {filteredCertTypes.length === 0 && (
+            <p className="text-[10px] text-amber-600 mt-1">請先請管理員在「證書類型管理」新增類型。</p>
           )}
         </div>
         <div className="space-y-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證照編號</label>
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證書編號</label>
           <input required value={formData.certNumber} onChange={e => setFormData({...formData, certNumber: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
         </div>
         <div className="space-y-1">
@@ -1303,7 +1531,7 @@ function AddCertForm({ staffList, certTypes, onComplete }: { staffList: Staff[],
           <input required type="date" value={formData.expiryDate} onChange={e => setFormData({...formData, expiryDate: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm transition-all" />
         </div>
         <div className="space-y-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證照檔案連結 (Google Drive / Dropbox) - 選填</label>
+          <label className="text-[10px] font-bold uppercase tracking-widest opacity-50">證書檔案連結 (Google Drive / Dropbox) - 選填</label>
           <input 
             type="url" 
             placeholder="https://drive.google.com/..."
@@ -1332,20 +1560,20 @@ function CertQRModal({ cert }: { cert: Certificate }) {
       </button>
       <AnimatePresence>
         {isOpen && (
-          <Modal title="證照查驗 QR Code" onClose={() => setIsOpen(false)}>
+          <Modal title="證書查驗 QR Code" onClose={() => setIsOpen(false)}>
             <div className="flex flex-col items-center space-y-6">
               <div className="p-4 bg-white border border-black/10 rounded-2xl shadow-inner">
                 <QRCodeSVG value={verifyUrl} size={200} level="H" />
               </div>
               <div className="text-center space-y-2">
                 <p className="font-bold text-lg">{cert.type}</p>
-                <p className="text-sm opacity-50">{cert.staffName} - {cert.certNumber}</p>
+                <p className="text-sm opacity-50">{cert.ownerName} - {cert.certNumber}</p>
               </div>
               <div className="w-full p-4 bg-black/[0.02] rounded-xl border border-black/5 text-center">
                 <p className="text-[10px] font-bold uppercase tracking-widest opacity-30 mb-1">查驗連結</p>
                 <p className="text-xs font-mono break-all opacity-50">{verifyUrl}</p>
               </div>
-              <p className="text-xs text-black/40 italic">現場查驗員可使用手機掃描此碼即時確認證照效期。</p>
+              <p className="text-xs text-black/40 italic">現場查驗員可使用手機掃描此碼即時確認證書效期。</p>
             </div>
           </Modal>
         )}

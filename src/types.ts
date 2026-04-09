@@ -5,7 +5,7 @@ export interface UserProfile {
   email: string;
   displayName: string;
   role: Role;
-  staffId?: string; // Link to staff record if role is staff
+  staffId?: string;
 }
 
 export interface Staff {
@@ -18,10 +18,20 @@ export interface Staff {
   createdAt: any;
 }
 
+export interface Machine {
+  id: string;
+  name: string;
+  machineNumber: string;
+  department: string;
+  contractNumber?: string;
+  createdAt: any;
+}
+
 export interface Certificate {
   id: string;
-  staffId: string;
-  staffName: string;
+  ownerType: 'staff' | 'machine';
+  ownerId: string;
+  ownerName: string;
   contractNumber?: string;
   type: string;
   certNumber: string;
@@ -35,8 +45,16 @@ export interface Certificate {
 export interface CertType {
   id: string;
   name: string;
+  category: 'staff' | 'machine';
   description?: string;
   createdAt: any;
+}
+
+export interface VerificationLog {
+  id: string;
+  certId: string;
+  timestamp: string;
+  user: string;
 }
 
 export interface NotificationLog {
