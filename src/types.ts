@@ -6,6 +6,7 @@ export interface UserProfile {
   displayName: string;
   role: Role;
   staffId?: string;
+  password?: string;
 }
 
 export interface Staff {
