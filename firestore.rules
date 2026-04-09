@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Fields: uid (string), email (string), displayName (string), role (string: admin|staff), staffId (string?)
+    //
+    // Collection: staff
+    // Fields: name (string), staffNumber (string), department (string), contractNumber (string?), createdAt (timestamp)
+    //
+    // Collection: certificates
+    // Fields: staffId (string), staffName (string), type (string), certNumber (string), issueDate (string), expiryDate (string), documentUrl (string?), status (string), createdAt (timestamp)
+    //
+    // Collection: certTypes
+    // Fields: name (string), createdAt (timestamp)
+    //
+    // Collection: systemSettings
+    // Fields: allowStaffEdit (boolean)
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "tekii.wtf@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isStaffEditAllowed() {
+      return get(/databases/$(database)/documents/systemSettings/global).data.allowStaffEdit == true;
+    }
+
+    function canWriteData() {
+      return isAdmin() || (isAuthenticated() && isStaffEditAllowed());
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'staffId']) &&
+             data.uid is string && data.email is string &&
+             data.role in ['admin', 'staff'];
+    }
+
+    // Rules
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role));
+      allow delete: if isAdmin();
+    }
+
+    match /staff/{staffId} {
+      allow read: if isAuthenticated();
+      allow write: if canWriteData();
+    }
+
+    match /certificates/{certId} {
+      allow read: if true; 
+      allow write: if canWriteData();
+    }
+
+    match /certTypes/{typeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /systemSettings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
